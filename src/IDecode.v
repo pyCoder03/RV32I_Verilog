@@ -1,23 +1,4 @@
 `timescale 1ns / 1ps
-//////////////////////////////////////////////////////////////////////////////////
-// Company: 
-// Engineer: 
-// 
-// Create Date: 11.04.2024 15:41:53
-// Design Name: 
-// Module Name: IDecode
-// Project Name: 
-// Target Devices: 
-// Tool Versions: 
-// Description: 
-// 
-// Dependencies: 
-// 
-// Revision:
-// Revision 0.01 - File Created
-// Additional Comments:
-// 
-//////////////////////////////////////////////////////////////////////////////////
 
 module Fetch_Reg(                       // Module to select between operand forwarded value and register file value
     input [4:0] reg_enc,
@@ -89,8 +70,8 @@ module IDecode(
     
     input [31:0] WB_val,
     
-    // Operand Forward values
-//    input [31:0] EXEBuf,        // EXE Unit Buffer value (in reality they are the buffer inputs, not the buffer values)
+    // Operand Forward values (Commented as currently the entire forwarding is not done in Decode stage itself
+//    input [31:0] EXEBuf,        // EXE Unit Buffer value
 //    input [31:0] MEMBuf,        // MEM Unit Buffer value
     
     // Output ports that go to register file
