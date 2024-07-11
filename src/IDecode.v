@@ -208,7 +208,7 @@ module IDecode(
             outdated[2]<=5'b0;
         end
         else begin // if(stall_) begin
-            outdated[0]<=rd_enc&{5{IDBufEn}};
+            outdated[0]<=rd_enc&{5{IDBufEn}};        // Rd signalled as all zero when Decode Stage outputs are invalid, particularly during stalls
             outdated[1]<=outdated[0];
             outdated[2]<=outdated[1];
         end
