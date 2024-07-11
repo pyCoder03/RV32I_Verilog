@@ -1,4 +1,3 @@
-
 `timescale 1ns / 1ps
 
 module Reg_File(
@@ -16,31 +15,12 @@ module Reg_File(
     output [31:0] rs2
 //    output reg[31:0] outdated               // Register to indicate whether the specific register value is updated, or to direct to operand forwarding
     );
-    
-//    write_gate    -> Clock gate for the updation of registers
-//    status_gate   -> Clock gate for "outdated" status of the registers
-    
-//    wire [31:0] write_route,status_route,reg_decoder_wr,reg_decoder_dest;
         
     reg [31:0] x[31:0];                     // Register File
                 
     reg [31:0] rs[1:0];
     wire [4:0] rs_enc[1:0];
     integer i;
-    
-//    // Register decoders for source operand registers rs1 and rs2
-//    Decoder32 d1(.i_5(rs1_enc),
-//                 .reg_decoder(reg_decoder_rs1));
-//    Decoder32 d2(.i_5(rs2_enc),
-//                 .reg_decoder(reg_decoder_rs2));
-    
-    // Register decoder for routing Write-Back
-//    Decoder32 d3(.i_5(reg_enc_write),
-//                 .reg_decoder(reg_decoder_wr));
-                 
-//    // Register decoder for updating corresponding "outdated" register for destination operand
-//    Decoder32 d4(.i_5(reg_dest_enc),
-//                 .reg_decoder(reg_decoder_dest));
     
     // Write port
     always @(posedge clk or negedge rst) begin
@@ -82,51 +62,7 @@ module Reg_File(
                 6'd63:	x[31]<=reg_w;
             endcase
         end
-    end
-    
-//    always @(posedge clk or negedge rst) begin
-//        if(rst==1'b0)
-//            for(i=0;i<32;i=i+1) x[i]<=31'b0;
-//        else begin
-//            if(write_route[0])	x[0]<=reg_w;
-//            if(write_route[1])	x[1]<=reg_w;
-//            if(write_route[2])	x[2]<=reg_w;
-//            if(write_route[3])	x[3]<=reg_w;
-//            if(write_route[4])	x[4]<=reg_w;
-//            if(write_route[5])	x[5]<=reg_w;
-//            if(write_route[6])	x[6]<=reg_w;
-//            if(write_route[7])	x[7]<=reg_w;
-//            if(write_route[8])	x[8]<=reg_w;
-//            if(write_route[9])	x[9]<=reg_w;
-//            if(write_route[10])	x[10]<=reg_w;
-//            if(write_route[11])	x[11]<=reg_w;
-//            if(write_route[12])	x[12]<=reg_w;
-//            if(write_route[13])	x[13]<=reg_w;
-//            if(write_route[14])	x[14]<=reg_w;
-//            if(write_route[15])	x[15]<=reg_w;
-//            if(write_route[16])	x[16]<=reg_w;
-//            if(write_route[17])	x[17]<=reg_w;
-//            if(write_route[18])	x[18]<=reg_w;
-//            if(write_route[19])	x[19]<=reg_w;
-//            if(write_route[20])	x[20]<=reg_w;
-//            if(write_route[21])	x[21]<=reg_w;
-//            if(write_route[22])	x[22]<=reg_w;
-//            if(write_route[23])	x[23]<=reg_w;
-//            if(write_route[24])	x[24]<=reg_w;
-//            if(write_route[25])	x[25]<=reg_w;
-//            if(write_route[26])	x[26]<=reg_w;
-//            if(write_route[27])	x[27]<=reg_w;
-//            if(write_route[28])	x[28]<=reg_w;
-//            if(write_route[29])	x[29]<=reg_w;
-//            if(write_route[30])	x[30]<=reg_w;
-//            if(write_route[31])	x[31]<=reg_w;
-//        end
-//    end
-    
-//    always @(posedge clk or negedge rst) begin
-//        if(rst==1'b0)   outdated<=32'b0;
-//        else    outdated<=(outdated&(~write_route))|((~outdated)&status_route);
-//    end    
+    end 
     
     // Read ports (rs1 and rs2 operands)     
     genvar j;
