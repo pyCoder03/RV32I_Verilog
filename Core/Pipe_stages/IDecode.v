@@ -54,7 +54,7 @@ module IDecode(
 //    input jump_stall_,mem_stall_,
     
     input [31:0] Ins,           // Instruction Fetch stage buffer
-    input [31:0] PC_curr,       // Current PC value sent thourgh the pipeline
+    input [31:0] PC_curr,       // Current PC value sent through the pipeline
     input rst,
     input clk_stage,
     input clk_stage_en,
