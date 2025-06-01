@@ -26,8 +26,8 @@ module LRU_Cache(           //
     reg[TAG_WIDTH-1:0] tags[NUM_LINES-1:0];
     reg[VALUE_WIDTH-1:0] values[NUM_LINES-1:0];
     reg[VALUE_WIDTH-1:0] read_buf;
-    reg[NUM_LINES-1:0] valid;
-    reg[NUM_LINES-1:0] dirty;
+    reg[NUM_LINES-1:0] valid;               // Indicates whether the value is valid (is it a reset value or a properly filled value)
+    reg[NUM_LINES-1:0] dirty;               // In a write-back cache, dirty bit is used to indicate that upon evition, the value must be updated to next level cache/memory 
 
     wire[NUM_PAIRS-1:0] right_shift_en_hit;     // When
     wire[NUM_PAIRS-1:0] left_shift_en;      // To delete one entry
