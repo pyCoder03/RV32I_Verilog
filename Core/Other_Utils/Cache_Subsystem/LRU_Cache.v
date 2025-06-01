@@ -5,7 +5,7 @@
 
 // Implementation of Least Recently Used (LRU) replacement policy
 // Fully Associative Cache with 4 lines
-module LRU_Cache(           // 
+module LRU_Cache(           
     input clk,
     input rst,
     input [TAG_WIDTH-1:0] input_tag,
@@ -35,11 +35,17 @@ module LRU_Cache(           //
     
     reg[TAG_WIDTH-1:0] next_tag[NUM_LINES-1:0];
     reg[VALUE_WIDTH-1:0] next_value[NUM_LINES-1:0];
+
+    reg cache_miss;
     
     wire[NUM_PAIRS-1:0] compare;
     
     integer i;
     
+    // REGISTER CONVENTION
+    // LSB is in the left, MSB in the right
+    // Data fed through MSB 
+
     // Comparing the input search tag with each and every valid tag stored in the cache
     
     generate
@@ -49,29 +55,30 @@ module LRU_Cache(           //
         end
     endgenerate
     
-    //
+    //  Connecting the right shift enable signal by rippling with compare values (only the bits left to the hit position to be right shifted)
     
     assign right_shift_en_hit[NUM_LINES-1]=compare[NUM_LINES-1];
     
     generate
         for(g=0;g<NUM_LINES-1;g=g+1) begin
-            assign right_shift_en_hit[g]=compare[g]|right_shift_en[g+1];
+            assign right_shift_en_hit[g]=compare[g]|right_shift_en_hit[g+1];
         end
     endgenerate
 
-    assign write_en=right_shift_en_hit|(~right_shift_en_hit[0]);
+    // Cache miss condition
 
-    //
-
-    assign left_shift_en[0]=compare[0];
-    
-    for(g=1;g<NUM_PAIRS;g=g+1) begin
-        assign left_shift_en[g]=compare[g]|left_shift_en[g-1];
+    always @(*) begin
+        cache_miss=case(compare)
+            4'd0:       1'b1;
+            default:    1'b0;
+        endcase
     end
-    
-    assign right_shift_en=~left_shift_en;
-    
-    //
+
+    // When there is cache miss, all cache entries have to be shifted, to add new entry at LSB position
+
+    assign write_en=(right_shift_en_hit|{NUM_LINES{cache_miss}})&(~WR_);
+
+    // Setting the input multiplexer for various cache hit conditions and the miss condition
     
     always @(*) begin
         next_value[0]=case({WR_,compare})
@@ -82,6 +89,8 @@ module LRU_Cache(           //
             default:    new_value;
         endcase
     end
+
+    // Tag value at 0 (leftmost position) can be directly taken from input tag, irrespective of whether there is a hit or miss, a read or write
 
     always @(*) begin   
         next_tag[0]=input_tag;
@@ -94,21 +103,24 @@ module LRU_Cache(           //
         end
     end
 
-    // Read buffer update (NO_CHANGE)
+    // Read buffer update (NO_CHANGE policy)
 
-    always @(negedge RD_ or negedge rst) begin
+    always @(posedge clk or negedge rst) begin
         if(rst==1'b0)   read_buf<={VALUE_WIDTH{1'b0}};
         else begin
-            read_buf<=case(compare)
-                4'd1:   values[0];
-                4'd2:   values[1];
-                4'd4:   values[2];
-                4'd8:   values[3];
-            endcase
+            if(~RD_) begin
+                read_buf<=case(compare)
+                    4'd1:   values[0];
+                    4'd2:   values[1];
+                    4'd4:   values[2];
+                    4'd8:   values[3];
+                endcase
+            end
         end
     end
 
-    
+    // Updating tag and value registers
+
     always @(posedge clk or negedge rst) begin
         if(rst==1'b0) begin
             for(i=0;i<NUM_LINES;i=i+1) begin
