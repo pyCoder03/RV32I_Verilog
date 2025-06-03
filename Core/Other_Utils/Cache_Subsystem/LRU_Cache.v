@@ -8,12 +8,15 @@
 module LRU_Cache(           
     input clk,
     input rst,
+    input select,           // Module Select input
     input [TAG_WIDTH-1:0] input_tag,
     input [VALUE_WIDTH-1:0] new_value,
-    input RD_,              // Read strobe              
-    input WR_,              // Write strobe
-    input invalidate,       // When memory location is written, old value must be deleted
-    output cache_miss
+    input RD_,              // Read enable            
+    input WR_,              // Write enable
+    output cache_miss,
+    output memwrite,        // Writing back dirty cache contents to lower memory hierarchy in case of eviction
+    output [TAG_WIDTH-1:0] tag_write,
+    output [VALUE_WIDTH-1:0] value_write
     );
 
     // WORKING
@@ -21,7 +24,7 @@ module LRU_Cache(
     // New write: Add to top and right-shift rest all
     // Overwrite: Bring the key value pair to top and alter the value, right shift till old position (inclusive)
     // Read: If hit occurs, bring to top and right shift till old position (inclusive)
-    //      If cache miss occurs, it's the driving system (IF or MEM stage)'s job to store the item in cache
+    //      If cache miss occurs during read, it's the driving system (IF or MEM stage)'s job to store the item in cache
     
     reg[TAG_WIDTH-1:0] tags[NUM_LINES-1:0];
     reg[VALUE_WIDTH-1:0] values[NUM_LINES-1:0];
@@ -30,17 +33,17 @@ module LRU_Cache(
     reg[NUM_LINES-1:0] dirty;               // In a write-back cache, dirty bit is used to indicate that upon evition, the value must be updated to next level cache/memory 
 
     wire[NUM_PAIRS-1:0] right_shift_en_hit;     // When
-    wire[NUM_PAIRS-1:0] left_shift_en;      // To delete one entry
     wire[NUM_PAIRS-1:0] write_en;           // Clock gates
     
     reg[TAG_WIDTH-1:0] next_tag[NUM_LINES-1:0];
     reg[VALUE_WIDTH-1:0] next_value[NUM_LINES-1:0];
+    reg next_dirty[NUM_LINES-1:0];
 
     reg cache_miss;
     
     wire[NUM_PAIRS-1:0] compare;
     
-    integer i;
+    genvar i,g;
     
     // REGISTER CONVENTION
     // LSB is in the left, MSB in the right
@@ -49,7 +52,6 @@ module LRU_Cache(
     // Comparing the input search tag with each and every valid tag stored in the cache
     
     generate
-    genvar g;
         for(g=0;g<NUM_LINES;g=g+1) begin
             assign compare[g]=(input_tag==tags[g])&valid[g];    
         end
@@ -76,7 +78,7 @@ module LRU_Cache(
 
     // When there is cache miss, all cache entries have to be shifted, to add new entry at LSB position
 
-    assign write_en=(right_shift_en_hit|{NUM_LINES{cache_miss}})&(~WR_);
+    assign write_en=(right_shift_en_hit|{NUM_LINES{cache_miss}})&{NUM_LINES{~WR_}}&{NUM_LINES{select}};
 
     // Setting the input multiplexer for various cache hit conditions and the miss condition
     
@@ -103,6 +105,24 @@ module LRU_Cache(
         end
     end
 
+    // Setting the multiplexer for LSB dirty bit (dirty bit is made 1 if a write is made)
+
+    always @(*) begin
+        next_dirty[0]=case({WR_,compare})
+            5'd17:  dirty[0];
+            5'd18:  dirty[1];
+            5'd20:  dirty[2];
+            5'd24:  dirty[3];
+            default:    1'b1;
+        endcase
+    end
+
+    always @(*) begin
+        for(i=1;i<NUM_LINES;i=i+1) begin
+            next_dirty[i]=dirty[i-1];
+        end
+    end
+
     // Read buffer update (NO_CHANGE policy)
 
     always @(posedge clk or negedge rst) begin
@@ -126,7 +146,6 @@ module LRU_Cache(
             for(i=0;i<NUM_LINES;i=i+1) begin
                 tags[i]<={TAG_WIDTH{1'b0}};
                 values[i]<={VALUE_WIDTH{1'b0}};
-                valid[i]<={NUM_LINES{1'b0}};
                 dirty[i]<={NUM_LINES{1'b0}};
             end
         end
@@ -135,9 +154,26 @@ module LRU_Cache(
                 if(write_en[i]) begin
                     tags[i]<=next_tag[i];
                     values[i]<=next_value[i];
+                    dirty[i]<=next_dirty[i];
                 end
             end
         end
     end
+
+    always @(posedge clk or negedge rst) begin
+        if(rst==1'b0) begin
+            valid<={NUM_LINES{1'b0}};
+        end
+        else begin
+            if((~WR_)&select&cache_miss)
+                valid<={valid,1'b1};
+        end
+    end
+
+    // To indicate eviction and to initiate write back to lower memory hierarchy incase the entry is dirty
+
+    assign tag_write=tags[NUM_LINES-1];
+    assign value_write=values[NUM_LINES-1];
+    assign memwrite=dirty[NUM_LINES-1]&(~WR_)&select&cache_miss;
 endmodule
 
