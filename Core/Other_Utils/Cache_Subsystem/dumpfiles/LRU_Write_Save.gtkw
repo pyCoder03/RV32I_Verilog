@@ -1,0 +1,52 @@
+[*]
+[*] GTKWave Analyzer v3.3.104 (w)1999-2020 BSI
+[*] Sat Jun 14 23:40:29 2025
+[*]
+[dumpfile] "/home/balaji/Processor design/RISCV_Verilog/Core/Other_Utils/Cache_Subsystem/dumpfiles/LRU_dump.vcd"
+[dumpfile_mtime] "Sat Jun 14 16:31:32 2025"
+[dumpfile_size] 8291
+[savefile] "/home/balaji/Processor design/RISCV_Verilog/Core/Other_Utils/Cache_Subsystem/dumpfiles/LRU_Write_Save.gtkw"
+[timestart] 0
+[size] 1846 1016
+[pos] -51 -51
+*-16.639202 65000 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1 -1
+[treeopen] LRU_test.
+[sst_width] 233
+[signals_width] 304
+[sst_expanded] 1
+[sst_vpaned_height] 289
+@28
+LRU_test.DUT.clk
+LRU_test.DUT.rst
+LRU_test.DUT.select
+LRU_test.DUT.RD_
+LRU_test.DUT.WR_
+@22
+LRU_test.DUT.input_tag[3:0]
+LRU_test.DUT.new_value[31:0]
+LRU_test.DUT.right_shift_en_hit[3:0]
+LRU_test.DUT.write_en[3:0]
+LRU_test.DUT.tags0[3:0]
+LRU_test.DUT.tags1[3:0]
+LRU_test.DUT.tags2[3:0]
+LRU_test.DUT.tags3[3:0]
+LRU_test.DUT.values0[31:0]
+LRU_test.DUT.values1[31:0]
+LRU_test.DUT.values2[31:0]
+LRU_test.DUT.values3[31:0]
+LRU_test.DUT.valid[3:0]
+LRU_test.DUT.compare[3:0]
+LRU_test.DUT.right_shift_en_hit[3:0]
+LRU_test.DUT.write_en[3:0]
+LRU_test.DUT.dirty[3:0]
+@28
+LRU_test.DUT.memwrite
+@22
+LRU_test.tag_write[3:0]
+LRU_test.DUT.value_write[31:0]
+@28
+LRU_test.DUT.cache_miss
+@22
+LRU_test.DUT.read_buf[31:0]
+[pattern_trace] 1
+[pattern_trace] 0

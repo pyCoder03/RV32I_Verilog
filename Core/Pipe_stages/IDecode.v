@@ -50,60 +50,58 @@ module Fetch_Reg(                       // Module to select between operand forw
 endmodule
 
 module IDecode(
-    // Dummy inputs (verification purpose)
-//    input jump_stall_,mem_stall_,
-    
     input [31:0] Ins,           // Instruction Fetch stage buffer
     input [31:0] PC_curr,       // Current PC value sent through the pipeline
     input rst,
     input clk_stage,
     input clk_stage_en,
     
-    // Input from EXE stage
-    input misprediction_,       // Indicates that previous instruction was a mispredicted branch so pipeline flush has to be done
-    
     // Inputs from Register File
     input [31:0] regfile1,      // Source register rs1 fetched from register file
     input [31:0] regfile2,      // Source register rs2 fetched from register file
-    
-    // Write port to Register File
-    
-    input [31:0] WB_val,
-    
+
+    input [4:0] outdated_EXE,outdated_MEM,outdated_WB;  // Destination register record from successive stages of the pipeline
+                                                        // outdated_EXE is the register value taken from the EXE stage buffer and so on
     // Operand Forward values
-//    input [31:0] EXEBuf,        // EXE Unit Buffer value (in reality they are the buffer inputs, not the buffer values)
-//    input [31:0] MEMBuf,        // MEM Unit Buffer value
+    input [31:0] EXEBuf,MEMBuf; // EXE Unit and MEM Unit Buffer values
     
+    // Tells at which stage the destination register value is actually acquired, so to generate stall according to dependencies
+    // ins_class={WB_stage_signal,MEM_stage_signal,EXE_stage_signal};
+    // 0 - The value is acquired in EXE stage
+    // 1 - The value is acquired in MEM stage
+    input [2:0] ins_class;
+
+    // PC Redirection Instruction type
+    // 00 : No jump, no branch
+    // 01 : Jump
+    // 10 : Non Taken Branch (Predicted to be taken)
+    // 11 : Taken Branch (Predicted not to be taken)
+    input [1:0] pc_ins_type;
+
+    // Mem_rd value from MEM stage
+    input Mem_rd_in;
+
     // Output ports that go to register file
-    output reg [4:0] rs1_enc,   
-//    output [31:0] opr1,
+    output reg [4:0] rs1_enc,
     output reg [4:0] rs2_enc,
+    
+    // Sending current PC to next stage
     output reg [31:0] PC_curr_reg,
-    
-    // Jump Target output
-//    output reg [31:0] jmp_target,
-    
-    // Output ports that go to EXE Unit
-//    output reg ALUEn,           // ALU Enable (Data Bypasses processing by ALU and directly reaches EXE Buffer)
-    output EXEBufEn,            // Clock gate for EXE Unit Buffer
+
+    // Sending pc_ins_type to next stage
+    output reg [1:0] pc_ins_type_reg,
+
+    // ALU Control Signals
     output reg [7:0] ALUOp,     // ALU operation select (Decoded in this stage itself so can be directly used by ALU)
-//    output reg ALUOp_w
     output reg sgn,             // Indicates whether the operation is signed or unsigned
     output reg isBranch,        // Indicates whether the current instruction is a BRANCH, enabling the EXE Unit to send misprediction_ signal whenever applicable
     output reg branch_type,     // Indicates the type of BRANCH instruction (Decoded funct3 argument)
     output reg [31:0] ALUopr1,  // ALU Operands
     output reg [31:0] ALUopr2,
-    output reg [3:0] Opr_src1,  // Indicates from where the true operand has to be fetched (one-hot encoded)
-    output reg [3:0] Opr_src2,
+    
     output reg [31:0] Store_src,
-    
-    output [31:0] rs1,          // IF stage also requires register values for JALR instruction
-    output [31:0] rs2,
-    
-    output [1:0] MEMEn,         // Enables or Bypasses MEM unit
-    output MEMBufEn,            // Clock gate for MEM unit
-    output IFBufEn,             // Pipeline stall enable (Active low)
-    output WBEn
+
+    output IDHold               // Hold the pipeline (For resolving dependencies)
     );
     
     wire[6:0] opcode=Ins[6:0];
@@ -111,7 +109,6 @@ module IDecode(
     wire[5:0] ins_type;         // Type of the instruction (R,I,S,B,U,J)
     
     wire[4:0] rd_enc;           // Destination register encoding for the current instruction cycle
-    reg[31:0] rs[1:0];
     
     // Immediate Field
     
@@ -122,9 +119,9 @@ module IDecode(
     wire[5:0] imm10_5;
     wire[3:0] imm4_1;
     
-    reg[31:0] PC_reg;
+    reg[5:0] cmp;               // Compare current Destination register with outdated registers
+    reg[1:0] Mem_rd;
     
-    reg[3:0] cmp;               // Compare current Destination register with outdated registers
     wire[4:0] rs_enc[1:0];      // regfile[1:0];
     wire[31:0] regfile[1:0];
     
@@ -137,18 +134,15 @@ module IDecode(
     // Else, it can be retrieved from EXE Unit Buffer without the need of stall
     // In the other case, where the Destination Register of the previous to previous Instruction cycle is required, no stall is needed
     // As the Register value is present at the MEM Unit Buffer, irrespective of that Instruction type
-    reg[4:0] outdated[2:0];     // Record of Destination Register for past two Instruction cycles
-    reg MEM_rd;                 // Tells that the previous instruction is a Memory Access instruction and hence operand cannot be forwarded
-                                // in the current cycle (from EXE stage) and hence a stall of 1 cycle is needed to fetch it from MEM stage
-    reg[1:0] MEMEnBuf[1:0];
-    reg mem_stall_;
-    wire exe_stall_,stall_;                 
+    reg[4:0] outdated;          // Record of Destination Register for past two Instruction cycles (Will be passed in the pipeline till Write-Back Unit)  
     
-    // Stall_ signals for IF, ID, EXE, MEM and WB units
-    wire IDBufEn,full_;
+    // Stall signal for ID unit
+    reg[1:0] RAW_stall;
     
     wire[2:0] funct3;
     wire[6:0] funct7;
+
+    wire[14:0] outdated_in={outdated_WB,outdated_MEM,outdated_EXE};
     
     // Opcode type
     localparam OP=6'd0,OP_IMM=6'd1,JAL=6'd2,JALR=6'd3,BRANCH=6'd4,LOAD=6'd5,STORE=6'd6,LUI=6'd7,AUIPC=6'd8;
@@ -159,8 +153,6 @@ module IDecode(
     assign funct3=Ins[14:12],funct7=Ins[31:25];
     assign rd_enc=Ins[11:7]&{5{~{op_minterms[BRANCH]|op_minterms[STORE]}}};
     assign rs_enc[0]=Ins[19:15],rs_enc[1]=Ins[24:20];
-    assign rs1=regfile1,rs2=regfile2;
-//    assign rs1=rs[0],rs2=rs[1];
     
     // OPCODE Chart (Has to be updated)
     // OP-IMM: 0
@@ -199,43 +191,37 @@ module IDecode(
     assign ins_type[U]=op_minterms[LUI]|op_minterms[AUIPC];
     assign ins_type[J]=op_minterms[JAL];
     
-    // Destination register record
+    // Pushing Destination register number into pipeline
     
     always @(posedge clk_stage or negedge rst) begin
-        if(rst==1'b0) begin
-            outdated[0]<=5'b0;
-            outdated[1]<=5'b0;
-            outdated[2]<=5'b0;
-        end
-        else begin // if(stall_) begin
-            outdated[0]<=rd_enc&{5{IDBufEn}};   
-            outdated[1]<=outdated[0];
-            outdated[2]<=outdated[1];
-        end
+        if(rst==1'b0) 
+            outdated<=5'b0;
+        else // if(stall_) begin
+            outdated<=rd_enc&{5{IDBufEn}};
     end  
             
+    // cmp[0] => Stores (outdated_EXE==rs1_enc)
+    // cmp[1] => Stores (outdated_MEM==rs1_enc)
+    // cmp[2] => Stores (outdated_WB==rs1_enc)
+    // cmp[3] => Stores (outdated_EXE==rs2_enc)
+    // cmp[4] => Stores (outdated_MEM==rs2_enc)
+    // cmp[5] => Stores (outdated_WB==rs2_enc)
+
     generate
     genvar i1,j1;
-    for(i1=0;i1<2;i1=i1+1) begin        
-        for(j1=0;j1<2;j1=j1+1) begin
-            always @(*) begin
-                case(opcode)
-                    OP,OP_IMM,JALR,LOAD,LUI,AUIPC,JAL:
-                        cmp[2*i1+j1]<=(outdated[j1]==rs_enc[i1]);
-                    default:
-                        cmp[2*i1+j1]<=5'b0;
-                endcase
+        for(i1=0;i1<2;i1=i1+1) begin        
+            for(j1=0;j1<3;j1=j1+1) begin
+                always @(*) begin
+                    case(opcode)
+                        OP,OP_IMM,JALR,LOAD,LUI,AUIPC,JAL:
+                            cmp[3*i1+j1]=(outdated_in[5*j1+:5]==rs_enc[i1]);
+                        default:
+                            cmp[3*i1+j1]=5'b0;
+                    endcase
+                end
             end
         end
-    end
     endgenerate    
-    
-//    generate
-//        genvar i;
-//        for(i=0;i<2;i=i+1) begin
-//            always @(*) rs[i]<=({32{cmp[2*i]}}&EXEBuf)|({32{cmp[2*i+1]}}&MEMBuf)|(~({32{cmp[2*i]|cmp[2*i+1]}})&regfile[i]);
-//        end
-//    endgenerate
     
     // Immediate field fetcher
     
@@ -256,87 +242,85 @@ module IDecode(
     wire r_w=ins_type[R]|ins_type[B];
     
     wire[1:0] neq={(rs2_enc!=5'b0),(rs1_enc!=5'b0)};
+
+    // Setting ALU Operand 1
+
+    // Opcodes that have rs1: OP, OP_IMM, JALR, BRANCH, LOAD and STORE
+    // Only JAL and BRANCH target calculations are done in dedicated adders
     
     always @(posedge clk_stage or negedge rst) begin
-        if(rst==0) begin
+        if(rst==1'b0) begin
             ALUopr1<=32'b0;
-//            ALUopr2<=32'b0;
         end
-        else if(IDBufEn) begin                                      // cmp[2]: Carries the destination reg encoding of an instruction three cycles ago
-            ALUopr1<=(neq[0]&(rs1_enc==outdated[2]))?WB_val:regfile1;    // So, forwarding is done from the write port to the Register File, if needed
-//            ALUopr2<=(neq[1]&(rs2_enc==outdated[2]))?WB_val:regfile2;    // This is becuase the current instruction is in Decode stage, while the actual value of the
-//            ALUopr1<=(r_w|ins_type[I]|ins_type[S])?rs1:PC_curr;   // required register is being written to the Regitsr File in the WB stage
-//            ALUopr2<=(r_w)?rs2:immediate;                         // Strictly speaking, it will be written at the end of the current cycle
+        else if(IDBufEn) begin
+            casez({opcode,neq[0],cmp[1:0]})
+                {OP,1'b1,2'b?1},{OP_IMM,1'b1,2'b?1},{JALR,1'b1,2'b?1},{BRANCH,1'b1,2'b?1},{LOAD,1'b1,2'b?1},{STORE,1'b1,2'b?1}:
+                    ALUopr1<=EXEBuf;
+                {OP,1'b1,2'b10},{OP_IMM,1'b1,2'b10},{JALR,1'b1,2'b10},{BRANCH,1'b1,2'b10},{LOAD,1'b1,2'b10},{STORE,1'b1,2'b10}:
+                    ALUopr1<=MEMBuf;
+                {OP,1'b1,2'b00},{OP_IMM,1'b1,2'b00},{JALR,1'b1,2'b00},{BRANCH,1'b1,2'b00},{LOAD,1'b1,2'b00},{STORE,1'b1,2'b00}:
+                    ALUopr1<=regfile1;
+                // LUI is carried out by placing 0 in operand 1 and immediate in operand 2
+                {OP,1'b0,2'b??},{OP_IMM,1'b0,2'b??},{JALR,1'b0,2'b??},{BRANCH,1'b0,2'b??},{LOAD,1'b0,2'b??},{STORE,1'b0,2'b??},{LUI,1'b?,2'b??}:
+                    ALUopr1<=32'b0;     // x0 selected
+                {AUIPC,1'b?,2'b??}:
+                    ALUopr1<=PC_curr;
+            endcase
         end    
     end
     
+    // Setting ALU Operand 2
+
+    // For Branch Instruction, there is immediate field, but the immediate field is sent directly to the PC-Gen stage for Next PC calculation
+    // Hence in this case, ALU Operands are just rs1 and rs2
+    // For Load, rs1 (base) and immediate (offset) are the operands, because the calculated address is needed in memory stage
+    
     always @(posedge clk_stage or negedge rst) begin                // Have to select immediate field when applicable
-        if(rst==0)
+        if(rst==1'b0)
             ALUopr2<=32'b0;
         else if(IDBufEn) begin
-            case({opcode,neq[0]&(rs1_enc==outdated[2])})
-                {OP,1'b1},{BRANCH,1'b1},{STORE,1'b1}:
-                    ALUopr2<=WB_val;
-                {OP,1'b0},{BRANCH,1'b0},{STORE,1'b0}:
-                    ALUopr2<=regfile2;                    
-                default:
+            casez({opcode,neq[1],cmp[3:2]})
+                {OP,1'b1,2'b?1},{BRANCH,1'b?,2'b?1},{STORE,1'b?,2'b?1}:
+                    ALUopr2<=EXEBuf;
+                {OP,1'b1,2'b10},{BRANCH,1'b?,2'b10},{STORE,1'b?,2'b10}:
+                    ALUopr2<=MEMBuf;
+                {OP,1'b1,2'b00},{BRANCH,1'b?,2'b00},{STORE,1'b?,2'b00}:
+                    ALUopr2<=regfile2;
+                {OP,1'b0,2'b??},{BRANCH,1'b0,2'b??},{STORE,1'b0,2'b??}:
+                    ALUopr2<=32'b0;                    
+                default:            // Other opcodes, such as OP-IMM, LUI, AUIPC, JAL, JALR, LOAD, STORE
                     ALUopr2<=immediate;
             endcase
         end
     end
-//                OP_IMM,LUI,AUIPC,LOAD,STORE:                                   
+
+    // Source register for STORE operation                                   
     
     always @(posedge clk_stage or negedge rst) begin
-        if(rst==0)
+        if(rst==1'b0)
             Store_src<=32'b0;
         else if(IDBufEn&ins_type[S])
             Store_src<=rs2;
     end
+
+    // Passing Current PC, Mem_rd and pc_ins_type in the pipeline
     
     always @(posedge clk_stage or negedge rst) begin
-        if(rst==0)
+        if(rst==0) begin
             PC_curr_reg<=32'b0;
-        else if(IDBufEn&ins_type[B])
+            Mem_rd<=1'b0;
+            pc_ins_type_reg<=2'b00;
+        end
+        else if(IDBufEn) begin
             PC_curr_reg<=PC_curr;
+            Mem_rd<=op_minterms[LOAD];
+            pc_ins_type_reg<=pc_ins_type;
+        end
     end
+
+    always
     
     // Source Register fetchers
-    
-    // Op_src encoding
-    
-    // 3'b100: No forwarding
-    // 3'b010: Forwarding from EXE Stage Buffer
-    // 3'b001: Forwarding from MEM Stage Buffer
-    
-    // Difference in processing between Jump and Branch instructions
-    // For Branch instructions, the operands carried into the Execute stage are the ones to be evaluated on
-    // For Jumps, the PC and immediate are carried as operands, no dedicated adder for jump target calculation
-    
-    always @(posedge clk_stage or negedge rst) begin        // Opr1 is a register (rs1) when instruction is of type R,I,S,B so forwarding may be required
-        if(rst==1'b0)                                       // In case if type U,J, forwarding is not required as operand is immediate
-            Opr_src1<=4'b0;
-        else if(IDBufEn) begin
-            case(ins_type[U])                                          
-                1'b1:
-                    Opr_src1<=4'b1000;                      // Indicates that operand is current PC (LUI or AUIPC)
-                default:
-                    Opr_src1<=(cmp[0]&(~MEM_rd)&neq[0])?4'b0010:(cmp[1])?4'b0001:4'b0100;   // Priority of new instruction over older one
-            endcase
-        end
-    end
-    
-    always @(posedge clk_stage or negedge rst) begin        // Opr2 is a register (rs1) when instruction is of type R,I,S,B so forwarding may be required
-        if(rst==1'b0)                                       // In case if type I,U,J, forwarding is not required as operand is immediate
-            Opr_src2<=3'b0;
-        else if(IDBufEn) begin
-            case(ins_type)
-                I,U,J:
-                    Opr_src2<=3'b100;                       // Indicates forarding not required
-                default:
-                    Opr_src2<=(cmp[2]&(~MEM_rd)&neq[1])?3'b010:(cmp[3])?3'b001:3'b100;   // Priority of new instruction over older one
-            endcase
-        end
-    end      
     
     // ALU Operation Select
 
@@ -350,65 +334,54 @@ module IDecode(
     localparam ADDI=8'd0,SLTIU=8'd1,ANDI=8'd2,ORI=8'd3,XORI=8'd4,SLLI=8'd5,SRLI=8'd6,SRAI=8'd7;
     
     always @(posedge clk_stage or negedge rst) begin
-        if(rst==0)
+        if(rst==1'b0)
             ALUOp<=8'b0;
         else if(IDBufEn) begin
-            case(opcode)
-                OP:
-                    case(funct3)
-                        ADDI:
-                            ALUOp<=ADD;
-                        SLTIU:
-                            ALUOp<=SUB;
-                        ANDI:
-                            ALUOp<=AND;
-                        ORI:
-                            ALUOp<=OR;
-                        XORI:
-                            ALUOp<=XOR;
-                        SLLI:
-                            ALUOp<=SLL;
-                        SRLI:
-                            ALUOp<=SRL;
-                        default:
-                            ALUOp<=SRA;
-                    endcase     
-                OP_IMM:
-                    case({funct7,funct3})
-                        ADD_:
-                            ALUOp<=ADD;
-                        SLT_,SLTU_,SUB_:
-                            ALUOp<=SUB;
-                        AND_:
-                            ALUOp<=AND;
-                        OR_:
-                            ALUOp<=OR;
-                        XOR_:
-                            ALUOp<=XOR;
-                        SLL_:
-                            ALUOp<=SLL;
-                        SRL_:
-                            ALUOp<=SRL;
-                        default:
-                            ALUOp<=SRA;
-                    endcase    
-                // LUI,AUIPC,JAL,JALR:
-                LUI, AUIPC:    
+            casez({opcode,funct7,funct3})
+                {OP,{7{1'b?}},ADDI}:
                     ALUOp<=ADD;
-                BRANCH:
-                    case(funct3)
-                        BEQ,BNE:
-                            ALUOp<=XOR;
-                        default:
-                            ALUOp<=SUB;
-                    endcase
+                {OP,{7{1'b?}},SLTIU}:
+                    ALUOp<=SUB;
+                {OP,{7{1'b?}},ANDI}:
+                    ALUOp<=AND;
+                {OP,{7{1'b?}},ORI}:
+                    ALUOp<=OR;
+                {OP,{7{1'b?}},XORI}:
+                    ALUOp<=XOR;
+                {OP,{7{1'b?}},SLL}:
+                    ALUOp<=SLL;
+                {OP,{7{1'b?}},SRL}:
+                    ALUOp<=SRL;
+                {OP,{7{1'b?}},SRA}:
+                    ALUOp<=SRA;
+                {OP_IMM,ADD_}:
+                    ALUOp<=ADD;
+                {OP_IMM,SLT_},{OP_IMM,SLTU_},{OP_IMM,SUB_}:
+                    ALUOp<=SUB;
+                {OP_IMM,AND_}:
+                    ALUOp<=AND;
+                {OP_IMM,OR_}:
+                    ALUOp<=OR;
+                {OP_IMM,XOR_}:
+                    ALUOp<=XOR;
+                {OP_IMM,SLL_}:
+                    ALUOp<=SLL;
+                {OP_IMM,SRL_}:
+                    ALUOp<=SRL;
+                {OP_IMM,SRA_}:
+                    ALUOp<=SRA;
+                {LUI,{9{1'b?}}},{AUIPC,{9{1'b?}}}:
+                    ALUOp<=ADD;
+                {BRANCH,{7'b?},BEQ},{BRANCH,{7'b?},BNE}:
+                    ALUOp<=XOR;
+                {BRANCH,{7'b?},BGEU},{BRANCH,{7'b?},BLTU}:
+                    ALUOp<=SUB;
                 default:
-                    ALUOp<=ADD;                         // Can be used for JAL and JALR            
-            endcase
+                    ALUOp<=ADD;         // Can be used for JAL and JALR
+            endcase            
         end
     end
-    
-    
+      
     // Sending SGN signal to discrminate between signed and unsigned operations
     
     // SRAI (Arithmetic Right Shift) is also considered a "signed operation"
@@ -418,23 +391,9 @@ module IDecode(
         if(rst==0)
             sgn<=1'b0;
         else if(IDBufEn) begin
-            case(opcode)
-                OP_IMM:
-                    sgn<=(funct3==SRAI);
-                OP:
-                    case({funct7,funct3})
-                        SLT_,SRA_:
-                            sgn<=1'b1;
-                        default:
-                            sgn<=1'b0;
-                    endcase
-                BRANCH:
-                    case(funct3)
-                        BLTU,BGEU:
-                            sgn<=1'b1;
-                        default:
-                            sgn<=1'b0;
-                    endcase
+            casez({opcode,funct7,funct3})
+                {OP_IMM,{10{1'b?}}},{OP,SLT_},{OP,SRA_},{BRANCH,{7{1'b?}},BLTU},{BRANCH,{7{1'b?}},BGEU}:
+                    sgn<=1'b1;
                 default:
                     sgn<=1'b0;
             endcase
@@ -469,62 +428,25 @@ module IDecode(
                               
     // Stall and flush signals
     
-    always @(posedge clk_stage or negedge rst) begin
-        if(rst==1'b0)
-            MEM_rd<=1'b0;
-        else
-            MEM_rd<=op_minterms[LOAD];
-    end
-    
-    always @(*) begin
-        case(rd_enc)
-            5'b0:
-                mem_stall_<=1'b1;
-            default:
-                mem_stall_<=~((cmp[0]|cmp[2])&MEM_rd);
-        endcase
-    end    
-    
-    assign exe_stall_=1'b1;                         // Functionality to be added in future
-    assign stall_=mem_stall_&exe_stall_;
-    
-    assign jmp_flush_=op_minterms[JAL]|op_minterms[JALR];
-    assign flush_=jmp_flush_&misprediction_;
-    
-    // Enable signals for all pipeline stage buffers
-    
-    assign MEMEn_w={op_minterms[LOAD]|op_minterms[STORE],op_minterms[STORE]};
-    assign MEMEn=MEMEnBuf[1];
-    
-    always @(posedge clk_stage or negedge rst) begin
-        if(rst==0) begin
-            MEMEnBuf[0]<=2'b0;
-            MEMEnBuf[1]<=2'b0;
+    generate
+        for(i1=0;i1<2;i1=i1+1) begin
+            always @(*) begin
+                casez({neq[i1],cmp[3*i1+:3],Mem_rd_in})
+                    // {3'b?10,3'b?0?} means, one operand register which is the destination register of an alu instruction is at MEM stage
+                    //      (result ready in EXE buffer, so no stall required)
+                    // {3'b100,3'b???} means, one operand register which is the destination register at WB stage
+                    //      (result ready in MEM buffer, so no stall required, may it be alu or LOAD instruction)
+                    // {3'b000,3'b???} means no matching, no dependency, no stall
+                    {1'b1,3'b?10,1'b0},{1'b1,3'b100,1'b?},{1'b1,3'b000,1'b?}:
+                        RAW_stall[i1]=1'b0; 
+                    default: 
+                        RAW_stall[i1]=1'b1;
+                endcase
+            end        
         end
-        else if(stall_) begin
-            MEMEnBuf[0]<=MEMEn_w;
-            MEMEnBuf[1]<=MEMEnBuf[0];
-        end
-    end
-     
-    Gate_stages gs(
-        .exe_stall_(exe_stall_),
-        .stall_(stall_),
-        .mispred_flush_(misprediction_),
-        .flush_(flush_),
-        .clk(clk_stage_en),
-        .rst(rst),
-        .IFBufEn(IFBufEn),
-        .IDBufEn(IDBufEn),
-        .EXEBufEn(EXEBufEn),
-        .MEMBufEn(MEMBufEn),
-        .WBBufEn(WBEn)
-    );
-    
-    // Adder for Jump target calculation
-    
-//    assign jmp_target=PC_Curr+((op_minterms[JAL])?immediate:
-    
+    endgenerate
+
+    assign IDHold=RAW_stall[0]|RAW_stall[1];
 endmodule
 
 module SR_Reg(
@@ -538,43 +460,39 @@ module SR_Reg(
     end
 endmodule
 
-module Gate_stages(
-    input exe_stall_,stall_,mispred_flush_,flush_,clk,rst,         // Here stall_ is the total AND of all possible stall signals
-    output IFBufEn,IDBufEn,EXEBufEn,MEMBufEn,WBBufEn               // flush_ is jmp_flush_&mispred_flush_
+module Pipeline_Handler(
+    input clk,
+    input flush,
+    input IFHold,IDHold,EXEHold,MEMHold,WBHold,                 // All hold signals are active high
+    output PCGenEn,IFBufEn,IDBufEn,EXEBufEn,MEMBufEn,WBBufEn            // flush_ is jmp_flush_&mispred_flush_
 );
-    reg r_mem_stall_,r_stall_,full_;
-    
-    reg[4:0] Enable_Reg;
-    wire[4:0] Enable_w; 
-    
+    reg[5:1] Enable_Reg;
+
+    wire[5:0] Buf_Enable;                       // 0 - PCGen, 1 - Instruction Fetch, ... , 5 - Write Back
+    wire[4:0] stall={IFHold,IDHold,EXEHold,MEMHold,WBHold};
+
+    integer i;
+    genvar g;
+
+    always @(*) begin
+        Buf_Enable[5]=~WBHold;
+        for(i=4;i>=1;i=i-1)  
+            Buf_Enable[i]=~(stall[i]&Buf_Enable[i+1]&Enable_Reg[i]);
+        Buf_Enable[0]=flush|Buf_Enable[1];                      // PCGen may be stopped due to traffic, but in case of misprediction flush, PCGen still needs to work
+    end
+
     generate
-    genvar i;
-        for(i=0;i<5;i=i+1) begin
-            always @(posedge clk or negedge rst) begin
+        for(g=1;g<5;g=g+1) begin
+            always @(posedge clk or negedge rst or negedge Buf_Enable[g]) begin
                 if(rst==1'b0)
-                    Enable_Reg[i]<=1'b1;
-                else if(full_)
-                    Enable_Reg[i]<=Enable_w[i];
+                    Enable_Reg[g]<=1'b1;
+                else if(Buf_Enable[g]==1'b0)
+                    Enable_Reg[g]<=1'b0;
+                else
+                    Enable_Reg[g]<=Enable_Reg[g+1];
             end
         end
     endgenerate
-
-    always @(posedge clk or negedge rst) begin
-        if(rst==1'b0) r_stall_<=1'b1;
-        else if(full_) r_stall_<=stall_;
-    end
     
-    always @(*) begin
-        case({Enable_Reg[4:2],Enable_w[2:0]})
-            6'b111111:
-                full_<=1'b0;
-            default:
-                full_<=1'b1;
-        endcase
-    end
-    
-    assign Enable_w[2:0]={exe_stall_&Enable_Reg[1],stall_&mispred_flush_&Enable_Reg[0],flush_};
-    assign Enable_w[4:3]=Enable_Reg[3:2];
-    
-    assign {WBBufEn,MEMBufEn,EXEBufEn,IDBufEn,IFBufEn}={Enable_Reg[4:2],Enable_Reg[1:0]&{2{r_stall_}}};
+    assign {WBBufEn,MEMBufEn,EXEBufEn,IDBufEn,IFBufEn,PCGenEn}={Enable_Reg[5:4],Enable_Reg[3:1]&{3{~flush}},Buf_Enable[0]};
 endmodule

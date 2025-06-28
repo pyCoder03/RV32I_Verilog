@@ -26,6 +26,7 @@ module Reg_File(
     reg [31:0] rs[1:0];
     wire [4:0] rs_enc[1:0];
     integer i;
+    genvar j;
     
 //    // Register decoders for source operand registers rs1 and rs2
 //    Decoder32 d1(.i_5(rs1_enc),
@@ -128,7 +129,6 @@ module Reg_File(
 //    end    
     
     // Read ports (rs1 and rs2 operands)     
-    genvar j;
     generate
         for(j=0;j<2;j=j+1) begin
             always @(*) begin
