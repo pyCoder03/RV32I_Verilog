@@ -60,26 +60,28 @@ module IDecode(
     input [31:0] regfile1,      // Source register rs1 fetched from register file
     input [31:0] regfile2,      // Source register rs2 fetched from register file
 
-    input [4:0] outdated_EXE,outdated_MEM,outdated_WB;  // Destination register record from successive stages of the pipeline
+    input [4:0] outdated_EXE,outdated_MEM,outdated_WB,  // Destination register record from successive stages of the pipeline
                                                         // outdated_EXE is the register value taken from the EXE stage buffer and so on
+    input IDBufEn,
+    
     // Operand Forward values
-    input [31:0] EXEBuf,MEMBuf; // EXE Unit and MEM Unit Buffer values
+    input [31:0] EXEBuf,MEMBuf, // EXE Unit and MEM Unit Buffer values
     
     // Tells at which stage the destination register value is actually acquired, so to generate stall according to dependencies
     // ins_class={WB_stage_signal,MEM_stage_signal,EXE_stage_signal};
     // 0 - The value is acquired in EXE stage
     // 1 - The value is acquired in MEM stage
-    input [2:0] ins_class;
+    input [2:0] ins_class,
 
     // PC Redirection Instruction type
     // 00 : No jump, no branch
     // 01 : Jump
     // 10 : Non Taken Branch (Predicted to be taken)
     // 11 : Taken Branch (Predicted not to be taken)
-    input [1:0] pc_ins_type;
+    input [1:0] pc_ins_type,
 
     // Mem_rd value from MEM stage
-    input Mem_rd_in;
+    input Mem_rd_in,
 
     // Output ports that go to register file
     output reg [4:0] rs1_enc,
@@ -243,6 +245,8 @@ module IDecode(
     
     wire[1:0] neq={(rs2_enc!=5'b0),(rs1_enc!=5'b0)};
 
+    reg[31:0] rs2_updated;
+
     // Setting ALU Operand 1
 
     // Opcodes that have rs1: OP, OP_IMM, JALR, BRANCH, LOAD and STORE
@@ -275,23 +279,25 @@ module IDecode(
     // Hence in this case, ALU Operands are just rs1 and rs2
     // For Load, rs1 (base) and immediate (offset) are the operands, because the calculated address is needed in memory stage
     
+    always @(*) begin                // Have to select immediate field when applicable
+        casez({opcode,neq[1],cmp[3:2]})
+            {OP,1'b1,2'b?1},{BRANCH,1'b1,2'b?1},{STORE,1'b1,2'b?1}:
+                rs2_updated<=EXEBuf;
+            {OP,1'b1,2'b10},{BRANCH,1'b1,2'b10},{STORE,1'b1,2'b10}:
+                rs2_updated<=MEMBuf;
+            {OP,1'b1,2'b00},{BRANCH,1'b1,2'b00},{STORE,1'b1,2'b00}:
+                rs2_updated<=regfile2;
+            // {OP,1'b0,2'b??},{BRANCH,1'b0,2'b??},{STORE,1'b0,2'b??}:
+            default:    
+                rs2_updated<=32'b0;
+        endcase
+    end
+
     always @(posedge clk_stage or negedge rst) begin                // Have to select immediate field when applicable
         if(rst==1'b0)
             ALUopr2<=32'b0;
-        else if(IDBufEn) begin
-            casez({opcode,neq[1],cmp[3:2]})
-                {OP,1'b1,2'b?1},{BRANCH,1'b?,2'b?1},{STORE,1'b?,2'b?1}:
-                    ALUopr2<=EXEBuf;
-                {OP,1'b1,2'b10},{BRANCH,1'b?,2'b10},{STORE,1'b?,2'b10}:
-                    ALUopr2<=MEMBuf;
-                {OP,1'b1,2'b00},{BRANCH,1'b?,2'b00},{STORE,1'b?,2'b00}:
-                    ALUopr2<=regfile2;
-                {OP,1'b0,2'b??},{BRANCH,1'b0,2'b??},{STORE,1'b0,2'b??}:
-                    ALUopr2<=32'b0;                    
-                default:            // Other opcodes, such as OP-IMM, LUI, AUIPC, JAL, JALR, LOAD, STORE
-                    ALUopr2<=immediate;
-            endcase
-        end
+        else if(IDBufEn)
+            ALUopr2<=(|{op_minterms[OP_IMM],op_minterms[LUI],op_minterms[AUIPC],op_minterms[JAL],op_minterms[JALR],op_minterms[LOAD],op_minterms[STORE]})?immediate:rs2_updated;
     end
 
     // Source register for STORE operation                                   
@@ -300,7 +306,7 @@ module IDecode(
         if(rst==1'b0)
             Store_src<=32'b0;
         else if(IDBufEn&ins_type[S])
-            Store_src<=rs2;
+            Store_src<=rs2_updated;
     end
 
     // Passing Current PC, Mem_rd and pc_ins_type in the pipeline
@@ -317,8 +323,6 @@ module IDecode(
             pc_ins_type_reg<=pc_ins_type;
         end
     end
-
-    always
     
     // Source Register fetchers
     
@@ -462,13 +466,14 @@ endmodule
 
 module Pipeline_Handler(
     input clk,
+    input rst,
     input flush,
     input IFHold,IDHold,EXEHold,MEMHold,WBHold,                 // All hold signals are active high
     output PCGenEn,IFBufEn,IDBufEn,EXEBufEn,MEMBufEn,WBBufEn            // flush_ is jmp_flush_&mispred_flush_
 );
     reg[5:1] Enable_Reg;
+    reg[5:0] Buf_Enable;                                        // 0 - PCGen, 1 - Instruction Fetch, ... , 5 - Write Back
 
-    wire[5:0] Buf_Enable;                       // 0 - PCGen, 1 - Instruction Fetch, ... , 5 - Write Back
     wire[4:0] stall={IFHold,IDHold,EXEHold,MEMHold,WBHold};
 
     integer i;
