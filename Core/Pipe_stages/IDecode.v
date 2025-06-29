@@ -84,8 +84,8 @@ module IDecode(
     input Mem_rd_in,
 
     // Output ports that go to register file
-    output reg [4:0] rs1_enc,
-    output reg [4:0] rs2_enc,
+    output [4:0] rs1_enc,
+    output [4:0] rs2_enc,
     
     // Sending current PC to next stage
     output reg [31:0] PC_curr_reg,
@@ -121,14 +121,14 @@ module IDecode(
     wire[5:0] imm10_5;
     wire[3:0] imm4_1;
     
-    reg[5:0] cmp;               // Compare current Destination register with outdated registers
+    wire[5:0] cmp;               // Compare current Destination register with outdated registers
     reg[1:0] Mem_rd;
     
     wire[4:0] rs_enc[1:0];      // regfile[1:0];
     wire[31:0] regfile[1:0];
     
     assign regfile[0]=regfile1,regfile[1]=regfile2;
-    assign rs_enc[0]=rs1_enc,rs_enc[1]=rs2_enc,regfile[0]=regfile1,regfile[1]=regfile2;
+    assign rs1_enc=rs_enc[0],rs2_enc=rs_enc[1],regfile[0]=regfile1,regfile[1]=regfile2;
     
     // Outdated registers
     // If the Destination Register of previous Instruction cycle is required as an operand in current cycle
@@ -187,7 +187,7 @@ module IDecode(
     // Instruction type classifier
     
     assign ins_type[R]=op_minterms[OP];
-    assign ins_type[I]=op_minterms[OP_IMM]|op_minterms[JALR]|op_minterms[LOAD];
+    assign ins_type[I]=|{op_minterms[OP_IMM],op_minterms[JALR],op_minterms[LOAD]};
     assign ins_type[S]=op_minterms[STORE];
     assign ins_type[B]=op_minterms[BRANCH];
     assign ins_type[U]=op_minterms[LUI]|op_minterms[AUIPC];
@@ -213,14 +213,7 @@ module IDecode(
     genvar i1,j1;
         for(i1=0;i1<2;i1=i1+1) begin        
             for(j1=0;j1<3;j1=j1+1) begin
-                always @(*) begin
-                    case(opcode)
-                        OP,OP_IMM,JALR,LOAD,LUI,AUIPC,JAL:
-                            cmp[3*i1+j1]=(outdated_in[5*j1+:5]==rs_enc[i1]);
-                        default:
-                            cmp[3*i1+j1]=5'b0;
-                    endcase
-                end
+                assign cmp[3*i1+j1]=(outdated_in[5*j1+:5]==rs_enc[i1]);
             end
         end
     endgenerate    
@@ -232,7 +225,7 @@ module IDecode(
     assign imm31=Ins[31];
     assign imm30_20=(w2)?{11{Ins[31]}}:Ins[30:20];
     assign imm19_12=(w1)?{8{Ins[31]}}:Ins[19:12];
-    assign imm11=(Ins[31]&(ins_type[I]|ins_type[S]))|(Ins[7]&ins_type[B])|(Ins[20]&ins_type[J]);
+    assign imm11=|{(Ins[31]&(ins_type[I]|ins_type[S])),(Ins[7]&ins_type[B]),(Ins[20]&ins_type[J])};
     assign imm10_5=Ins[30:25]&{6{w2}};
     assign imm4_1=(Ins[24:21]&{4{ins_type[I]|ins_type[J]}})|(Ins[11:8]&{4{ins_type[S]|ins_type[B]}});
     assign imm0=(Ins[20]&ins_type[I])|(Ins[7]&ins_type[S]);
@@ -267,7 +260,8 @@ module IDecode(
                 // LUI is carried out by placing 0 in operand 1 and immediate in operand 2
                 {OP,1'b0,2'b??},{OP_IMM,1'b0,2'b??},{JALR,1'b0,2'b??},{BRANCH,1'b0,2'b??},{LOAD,1'b0,2'b??},{STORE,1'b0,2'b??},{LUI,1'b?,2'b??}:
                     ALUopr1<=32'b0;     // x0 selected
-                {AUIPC,1'b?,2'b??}:
+//                {AUIPC,1'b?,2'b??}:
+                default:
                     ALUopr1<=PC_curr;
             endcase
         end    
