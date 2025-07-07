@@ -1,60 +1,10 @@
 `timescale 1ns / 1ps
 
-module Fetch_Reg(                       // Module to select between operand forwarded value and register file value
-    input [4:0] reg_enc,
-    input [31:0] reg_in,
-    input [31:0] op_fwd,
-    input [31:0] outdated,
-    output [31:0] reg_val
-);
-    reg od;
-    
-    always @(*) begin
-        case(reg_enc)
-            5'd0:	od<=outdated[0];
-            5'd1:	od<=outdated[1];
-            5'd2:	od<=outdated[2];
-            5'd3:	od<=outdated[3];
-            5'd4:	od<=outdated[4];
-            5'd5:	od<=outdated[5];
-            5'd6:	od<=outdated[6];
-            5'd7:	od<=outdated[7];
-            5'd8:	od<=outdated[8];
-            5'd9:	od<=outdated[9];
-            5'd10:	od<=outdated[10];
-            5'd11:	od<=outdated[11];
-            5'd12:	od<=outdated[12];
-            5'd13:	od<=outdated[13];
-            5'd14:	od<=outdated[14];
-            5'd15:	od<=outdated[15];
-            5'd16:	od<=outdated[16];
-            5'd17:	od<=outdated[17];
-            5'd18:	od<=outdated[18];
-            5'd19:	od<=outdated[19];
-            5'd20:	od<=outdated[20];
-            5'd21:	od<=outdated[21];
-            5'd22:	od<=outdated[22];
-            5'd23:	od<=outdated[23];
-            5'd24:	od<=outdated[24];
-            5'd25:	od<=outdated[25];
-            5'd26:	od<=outdated[26];
-            5'd27:	od<=outdated[27];
-            5'd28:	od<=outdated[28];
-            5'd29:	od<=outdated[29];
-            5'd30:	od<=outdated[30];
-            5'd31:	od<=outdated[31];
-        endcase
-    end
-    
-    assign reg_val=(od)?op_fwd:reg_in;
-endmodule
-
 module IDecode(
     input [31:0] Ins,           // Instruction Fetch stage buffer
     input [31:0] PC_curr,       // Current PC value sent through the pipeline
     input rst,
     input clk_stage,
-    input clk_stage_en,
     
     // Inputs from Register File
     input [31:0] regfile1,      // Source register rs1 fetched from register file
@@ -73,15 +23,21 @@ module IDecode(
     // 1 - The value is acquired in MEM stage
     input [2:0] ins_class,
 
-    // PC Redirection Instruction type
-    // 00 : No jump, no branch
-    // 01 : Jump
-    // 10 : Non Taken Branch (Predicted to be taken)
-    // 11 : Taken Branch (Predicted not to be taken)
-    input [1:0] pc_ins_type,
+    // PC Redirection Instruction type (Comes from Branch Prediction Unit)
+    // 0 : No branch
+    // 1 : Some branch taken    
+    input pc_ins_type,
 
     // Mem_rd value from MEM stage
     input Mem_rd_in,
+
+    `ifdef BRANCH_HISTORY_EN
+        input [7:0] branch_hist,
+    `endif
+
+    `ifdef BRANCH_PRED_EN
+        input branch_pred,
+    `endif
 
     // Output ports that go to register file
     output [4:0] rs1_enc,
@@ -91,12 +47,14 @@ module IDecode(
     output reg [31:0] PC_curr_reg,
 
     // Sending pc_ins_type to next stage
-    output reg [1:0] pc_ins_type_reg,
+    output reg pc_ins_type_reg,
 
     // ALU Control Signals
     output reg [7:0] ALUOp,     // ALU operation select (Decoded in this stage itself so can be directly used by ALU)
     output reg sgn,             // Indicates whether the operation is signed or unsigned
     output reg isBranch,        // Indicates whether the current instruction is a BRANCH, enabling the EXE Unit to send misprediction_ signal whenever applicable
+    output reg isJump,
+    output reg isSLT,
     output reg branch_type,     // Indicates the type of BRANCH instruction (Decoded funct3 argument)
     output reg [31:0] ALUopr1,  // ALU Operands
     output reg [31:0] ALUopr2,
@@ -236,9 +194,17 @@ module IDecode(
     
     wire r_w=ins_type[R]|ins_type[B];
     
-    wire[1:0] neq={(rs2_enc!=5'b0),(rs1_enc!=5'b0)};
+    wire [1:0] neq={(rs2_enc!=5'b0),(rs1_enc!=5'b0)};
 
-    reg[31:0] rs2_updated;
+    reg [31:0] rs2_updated;
+    
+    `ifdef BRANCH_HISTORY_EN
+        reg [7:0] branch_hist_reg;
+    `endif  
+
+    `ifdef BRANCH_PRED_EN
+        reg branch_pred_reg;
+    `endif 
 
     // Setting ALU Operand 1
 
@@ -303,18 +269,31 @@ module IDecode(
             Store_src<=rs2_updated;
     end
 
-    // Passing Current PC, Mem_rd and pc_ins_type in the pipeline
+    // Passing Current PC, Mem_rd, pc_ins_type and branch_hist in the pipeline
     
     always @(posedge clk_stage or negedge rst) begin
         if(rst==0) begin
             PC_curr_reg<=32'b0;
             Mem_rd<=1'b0;
-            pc_ins_type_reg<=2'b00;
+            pc_ins_type_reg<=1'b0;
+            `ifdef BRANCH_HISTORY_EN
+                branch_hist_reg<=8'd0;
+            `endif
+            `ifdef BRANCH_PRED_EN
+                branch_pred_reg<=1'b0;
+            `endif 
         end
         else if(IDBufEn) begin
             PC_curr_reg<=PC_curr;
             Mem_rd<=op_minterms[LOAD];
+            // If branch is predicted to be taken, then misprediction would mean to generate address of next instruction to BRANCH
             pc_ins_type_reg<=pc_ins_type;
+            `ifdef BRANCH_HISTORY_EN
+                branch_hist_reg<=branch_hist;
+            `endif
+            `ifdef BRANCH_PRED_EN
+                branch_pred_reg<=branch_pred;
+            `endif 
         end
     end
     
@@ -322,9 +301,19 @@ module IDecode(
     
     // ALU Operation Select
 
-    localparam ADD=8'd1,SUB=8'd3,AND=8'd4,OR=8'd8,XOR=8'd16,SLL=8'd32,SRL=8'd64,SRA=8'd128;
+    localparam ADD=8'd1,SUB=8'd3,SLT=8'd7,AND=8'd4,OR=8'd8,XOR=8'd16,SLL=8'd32,SRL=8'd64,SRA=8'd128;
     
-    localparam BEQ=3'd0,BNE=3'd1,BLTU=3'd2,BGEU=3'd3;
+    localparam BEQ=3'd0,BNE=3'd1,BLTU=3'd2,BLT=3'd3,BGEU=3'd4,BGE=3'd5;
+
+    // ALUOp Map
+
+    // ADD: 0 0 0 0 0 0 1
+    // SUB: 0 0 0 0 0 1 1       // SLT is signalled as SUB, with a bit in branch_type field, together with "less than" comparison selector
+    // AND: 0 0 0 0 1 0 0
+    //  OR: 0 0 0 1 0 0 0
+    // XOR: 0 0 1 0 0 0 0
+    // SLL: 0 1 0 0 0 0 0
+    // SRL: 1 0 0 0 0 0 0       // SRA is signalled as Shift Right, with 1 in "sgn" bit
     
     //
     localparam ADD_=10'd0,SLT_=10'd1,SLTU_=10'd2,AND_=10'd3,OR_=10'd4,XOR_=10'd5,SLL_=10'd6,SRL_=10'd7,SUB_=10'd256,SRA_=10'd257;
@@ -335,45 +324,24 @@ module IDecode(
         if(rst==1'b0)
             ALUOp<=8'b0;
         else if(IDBufEn) begin
+            (*parallel_case*)
             casez({opcode,funct7,funct3})
-                {OP,{7{1'b?}},ADDI}:
+                {OP,{7{1'b?}},ADDI},{OP_IMM,ADD_},{LUI,{9{1'b?}}},{AUIPC,{9{1'b?}}}:
                     ALUOp<=ADD;
-                {OP,{7{1'b?}},SLTIU}:
+                {OP,{7{1'b?}},SLTIU},{OP_IMM,SLT_},{OP_IMM,SLTU_},{OP_IMM,SUB_},{BRANCH,{7'b?},BGEU},{BRANCH,{7'b?},BGE},{BRANCH,{7'b?},BLTU},{BRANCH,{7'b?},BLT}:
                     ALUOp<=SUB;
-                {OP,{7{1'b?}},ANDI}:
+                {OP,{7{1'b?}},ANDI},{OP_IMM,AND_}:
                     ALUOp<=AND;
-                {OP,{7{1'b?}},ORI}:
+                {OP,{7{1'b?}},ORI},{OP_IMM,OR_}:
                     ALUOp<=OR;
-                {OP,{7{1'b?}},XORI}:
+                {OP,{7{1'b?}},XORI},{OP_IMM,XOR_},{BRANCH,{7'b?},BEQ},{BRANCH,{7'b?},BNE}:
                     ALUOp<=XOR;
-                {OP,{7{1'b?}},SLL}:
+                {OP,{7{1'b?}},SLL},{OP_IMM,SLL_}:
                     ALUOp<=SLL;
-                {OP,{7{1'b?}},SRL}:
+                {OP,{7{1'b?}},SRL},{OP_IMM,SRL_}:
                     ALUOp<=SRL;
-                {OP,{7{1'b?}},SRA}:
+                {OP,{7{1'b?}},SRA},{OP_IMM,SRA_}:
                     ALUOp<=SRA;
-                {OP_IMM,ADD_}:
-                    ALUOp<=ADD;
-                {OP_IMM,SLT_},{OP_IMM,SLTU_},{OP_IMM,SUB_}:
-                    ALUOp<=SUB;
-                {OP_IMM,AND_}:
-                    ALUOp<=AND;
-                {OP_IMM,OR_}:
-                    ALUOp<=OR;
-                {OP_IMM,XOR_}:
-                    ALUOp<=XOR;
-                {OP_IMM,SLL_}:
-                    ALUOp<=SLL;
-                {OP_IMM,SRL_}:
-                    ALUOp<=SRL;
-                {OP_IMM,SRA_}:
-                    ALUOp<=SRA;
-                {LUI,{9{1'b?}}},{AUIPC,{9{1'b?}}}:
-                    ALUOp<=ADD;
-                {BRANCH,{7'b?},BEQ},{BRANCH,{7'b?},BNE}:
-                    ALUOp<=XOR;
-                {BRANCH,{7'b?},BGEU},{BRANCH,{7'b?},BLTU}:
-                    ALUOp<=SUB;
                 default:
                     ALUOp<=ADD;         // Can be used for JAL and JALR
             endcase            
@@ -401,25 +369,43 @@ module IDecode(
     // Updating isBranch
     
     always @(posedge clk_stage or negedge rst) begin
-        if(rst==1'b0)
+        if(rst==1'b0) begin
             isBranch<=1'b0;
-        else if(IDBufEn)
+            isJump<=1'b0;
+        end
+        else if(IDBufEn) begin
             isBranch<=op_minterms[BRANCH];
+            isJump<=op_minterms[JAL]|op_minterms[JALR];
+        end
     end
     
+    // BRANCH Type Map
+
+    // BEQ: 0 1 0 1
+    // BNE: 0 0 0 1
+    // BLT: 0 0 1 0     (For all branches with "Less than" comparison)
+    // BGE: 0 1 1 0
+    // SLT: 1 0 0 0
+
+    // Bit 0 selects the output of the XOR operator of the ALU
+    // Bit 1 selects the sign bit of the adder output (signed/unsigned nature of operans is handled by 'sgn' bit)
+    // Bit 2 goes to the XOR gate that passes/inverts the bit evaluated from ALU
+    // Bit 3 is SLT. If high, SLT operation is performed and corresponding value is placed in EXE Buffer. Else, it means it is a BRANCH instruction 
+
     always @(posedge clk_stage or negedge rst) begin
         if(rst==1'b0)
             branch_type<=4'b0;
         else if(IDBufEn) begin
+            (*full_case*)
             case(funct3)
                 BEQ:
-                    branch_type<=4'b0001;
+                    branch_type<=4'b0101;
                 BNE:
+                    branch_type<=4'b0001;
+                BLTU,BLT:
                     branch_type<=4'b0010;
-                BLTU:
-                    branch_type<=4'b0100;
-                default:
-                    branch_type<=4'b1000;
+                BGEU,BGE:
+                    branch_type<=4'b0110;
             endcase
         end
     end
